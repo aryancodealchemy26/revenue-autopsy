@@ -1,0 +1,1 @@
+"""Outcomes domain package."""
