@@ -19,3 +19,12 @@ class OutcomeStatus(str, Enum):
     MEASURED = "measured"
     VERIFIED = "verified"
     AUDITED = "audited"
+
+
+class VerificationStatus(str, Enum):
+    """Deterministic verification status of an executed action."""
+
+    VERIFIED_SUCCESS = "verified_success"
+    VERIFIED_FAILURE = "verified_failure"
+    INCONCLUSIVE = "inconclusive"
+    PENDING = "pending"

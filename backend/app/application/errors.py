@@ -114,3 +114,19 @@ class ProviderExecutionError(ExecutionError):
     def __init__(self, provider: str, message: str):
         super().__init__(f"Provider '{provider}' execution failed: {message}")
         self.provider = provider
+
+
+class VerificationError(ApplicationError):
+    """Base exception for post-execution outcome verification errors."""
+
+    pass
+
+
+class DuplicateOutcomeError(VerificationError):
+    """Raised when an outcome has already been measured and recorded for an action."""
+
+    def __init__(self, action_id: UUID):
+        super().__init__(
+            f"An outcome has already been verified and recorded for ActionPlan '{action_id}'."
+        )
+        self.action_id = action_id

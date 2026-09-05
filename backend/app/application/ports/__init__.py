@@ -12,6 +12,7 @@ from app.application.ports.repositories import (
     RevenueEventRepository,
 )
 from app.application.ports.unit_of_work import UnitOfWork
+from app.application.ports.verification_provider import VerificationEvidenceProviderPort
 
 __all__ = [
     "ActionPlanRepository",
@@ -24,4 +25,5 @@ __all__ = [
     "PolicyEnginePort",
     "RevenueEventRepository",
     "UnitOfWork",
+    "VerificationEvidenceProviderPort",
 ]
