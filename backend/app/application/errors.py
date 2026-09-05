@@ -130,3 +130,23 @@ class DuplicateOutcomeError(VerificationError):
             f"An outcome has already been verified and recorded for ActionPlan '{action_id}'."
         )
         self.action_id = action_id
+
+
+class InvestigationWorkflowError(ApplicationError):
+    """Base exception for investigation workflow failures."""
+
+    pass
+
+
+class AIProviderUnavailableWorkflowError(InvestigationWorkflowError):
+    """Raised when upstream AI provider is unavailable during investigation."""
+
+    def __init__(self, message: str = "AI investigation provider is temporarily unavailable."):
+        super().__init__(message)
+
+
+class InvestigationWorkflowFailedError(InvestigationWorkflowError):
+    """Raised when the investigation workflow encounters an unrecoverable failure or validation error."""
+
+    def __init__(self, message: str = "Investigation workflow failed to produce a valid diagnosis."):
+        super().__init__(message)

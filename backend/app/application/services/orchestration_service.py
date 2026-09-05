@@ -8,7 +8,12 @@ from uuid import UUID
 from app.agents.graph.state import IncidentInvestigationState, WorkflowStatus
 from app.agents.graph.workflow import create_incident_investigation_graph
 from app.ai.gateway import AIGateway
-from app.application.errors import IncidentNotFoundError, MerchantNotFoundError
+from app.application.errors import (
+    AIProviderUnavailableWorkflowError,
+    IncidentNotFoundError,
+    InvestigationWorkflowFailedError,
+    MerchantNotFoundError,
+)
 from app.application.ports.evidence_provider import EvidenceProvider
 from app.application.ports.policy_engine import PolicyEnginePort
 from app.application.ports.unit_of_work import UnitOfWork
@@ -73,6 +78,8 @@ class IncidentOrchestrationService:
             if not merchant:
                 raise MerchantNotFoundError(incident.merchant_id)
 
+            original_status = incident.status
+
             # 2. Update status to INVESTIGATING
             incident.status = IncidentStatus.INVESTIGATING
             await self._uow.incidents.save(incident)
@@ -108,7 +115,24 @@ class IncidentOrchestrationService:
             }
 
             # 5. Execute LangGraph workflow
-            result_state: IncidentInvestigationState = await self._graph.ainvoke(initial_state)
+            try:
+                result_state: IncidentInvestigationState = await self._graph.ainvoke(initial_state)
+            except Exception:
+                incident.status = original_status
+                await self._uow.incidents.save(incident)
+                raise
+
+            workflow_status = result_state.get("status")
+            if workflow_status == WorkflowStatus.AI_UNAVAILABLE:
+                incident.status = original_status
+                await self._uow.incidents.save(incident)
+                err_msg = result_state.get("error_message", "AI provider is temporarily unavailable.")
+                raise AIProviderUnavailableWorkflowError(err_msg)
+            elif workflow_status == WorkflowStatus.FAILED:
+                incident.status = original_status
+                await self._uow.incidents.save(incident)
+                err_msg = result_state.get("error_message", "Investigation workflow execution failed.")
+                raise InvestigationWorkflowFailedError(err_msg)
 
             # 6. If ActionPlan proposed, evaluate against deterministic Policy Engine
             proposed_action = result_state.get("proposed_action")

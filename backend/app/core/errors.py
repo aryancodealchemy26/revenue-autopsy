@@ -8,11 +8,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.application.errors import (
     ActionNotApprovedError,
+    AIProviderUnavailableWorkflowError,
     ApplicationError,
     DuplicateExecutionError,
     DuplicateOutcomeError,
     EntityNotFoundError,
     InvalidStateTransitionError,
+    InvestigationWorkflowError,
+    InvestigationWorkflowFailedError,
     TenantMismatchError,
 )
 
@@ -21,6 +24,32 @@ logger = logging.getLogger("revenue_autopsy.errors")
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Register centralized custom exception handlers for the FastAPI application."""
+
+    @app.exception_handler(AIProviderUnavailableWorkflowError)
+    async def ai_unavailable_handler(request: Request, exc: AIProviderUnavailableWorkflowError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": 503,
+                    "type": exc.__class__.__name__,
+                    "message": "AI investigation service is temporarily unavailable. Please retry shortly.",
+                }
+            },
+        )
+
+    @app.exception_handler(InvestigationWorkflowFailedError)
+    async def investigation_failed_handler(request: Request, exc: InvestigationWorkflowFailedError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "error": {
+                    "code": 502,
+                    "type": exc.__class__.__name__,
+                    "message": "Investigation workflow failed to produce a valid diagnosis.",
+                }
+            },
+        )
 
     @app.exception_handler(EntityNotFoundError)
     async def entity_not_found_handler(request: Request, exc: EntityNotFoundError) -> JSONResponse:

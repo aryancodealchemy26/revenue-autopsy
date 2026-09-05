@@ -217,15 +217,35 @@ Revenue-Autopsy
 │     │  └─ test_policy_engine.py
 │     ├─ test_config.py
 │     ├─ test_health.py
-│     ├─ verification
-│     │  └─ test_verification_service.py
-│     └─ __init__.py
-├─ docker-compose.yml
-├─ docs
-├─ frontend
-├─ LICENSE
-├─ README.md
-├─ scripts
-└─ tests
-
 ```
+
+---
+
+## Development Setup & Database Seeding
+
+### 1. Database Migrations
+Run Alembic migrations to establish the PostgreSQL schema:
+```bash
+cd backend
+alembic upgrade head
+```
+
+### 2. Seed Development & Demo Data (Idempotent)
+Populate the database with the deterministic sandbox merchant (`00000000-0000-0000-0000-000000000001`) and the 4 canonical demo incidents (with diagnostic telemetry evidence):
+```bash
+# In backend/ directory:
+python -m app.scripts.seed
+```
+
+### 3. Run Backend API Server
+```bash
+cd backend
+uvicorn app.main:app --port 8000 --reload
+```
+
+### 4. Run Frontend Cockpit
+```bash
+cd frontend
+npm run dev
+```
+Open `http://localhost:5173` to access the Incident Cockpit.

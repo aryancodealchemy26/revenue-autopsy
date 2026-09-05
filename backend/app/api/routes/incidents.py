@@ -1,5 +1,4 @@
-"""Incident and investigation API endpoints."""
-
+import logging
 from typing import List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -22,11 +21,18 @@ from app.api.schemas.incidents import (
 )
 from app.api.schemas.outcomes import OutcomeResponse
 from app.api.schemas.provenance import ProvenanceEventResponse
+from app.application.errors import (
+    AIProviderUnavailableWorkflowError,
+    InvestigationWorkflowError,
+    InvestigationWorkflowFailedError,
+)
 from app.application.ports.unit_of_work import UnitOfWork
 from app.application.services.incident_service import IncidentService
 from app.application.services.investigation_service import InvestigationService
 from app.application.services.orchestration_service import IncidentOrchestrationService
 from app.domain.actions.enums import ActionStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
@@ -141,13 +147,26 @@ async def investigate_incident(
             detail=f"Incident '{incident_id}' not found.",
         )
 
-    result_state = await orchestration_service.run_investigation_workflow(
-        incident_id=incident_id,
-        baseline_hourly_rate=request.baseline_hourly_rate,
-        current_hourly_rate=request.current_hourly_rate,
-        duration_hours=request.duration_hours,
-        correlation_id=request.correlation_id,
-    )
+    try:
+        result_state = await orchestration_service.run_investigation_workflow(
+            incident_id=incident_id,
+            baseline_hourly_rate=request.baseline_hourly_rate,
+            current_hourly_rate=request.current_hourly_rate,
+            duration_hours=request.duration_hours,
+            correlation_id=request.correlation_id,
+        )
+    except AIProviderUnavailableWorkflowError as e:
+        logger.warning("AI provider unavailable during investigation of %s: %s", incident_id, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI investigation service is temporarily unavailable. Please retry shortly.",
+        )
+    except (InvestigationWorkflowFailedError, InvestigationWorkflowError) as e:
+        logger.error("Investigation workflow failed for %s: %s", incident_id, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Investigation workflow failed to produce a valid diagnosis.",
+        )
 
     # Reload updated incident
     updated_incident = await incident_service.get_incident(incident_id)

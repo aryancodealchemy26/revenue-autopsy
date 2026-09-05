@@ -212,3 +212,123 @@ async def test_investigate_incident_endpoint(client, fake_uow):
     assert payload["proposed_action"]["action_type"] == "gateway_reroute"
     assert payload["policy_decision"]["decision"] == "allow"
     assert payload["incident"]["status"] == "action_approved"
+
+
+@pytest.mark.anyio
+async def test_investigate_incident_default_fake_provider_path(client, fake_uow):
+    """Verify POST /investigate succeeds without overrides using default FakeProvider."""
+    merchant = Merchant(merchant_id=uuid4(), name="Merchant Live Demo", currency="INR")
+    await fake_uow.merchants.save(merchant)
+
+    incident = Incident(
+        incident_id=uuid4(),
+        merchant_id=merchant.merchant_id,
+        incident_type=IncidentType.PAYMENT_DROP_SPIKE,
+        severity=IncidentSeverity.HIGH,
+        status=IncidentStatus.DETECTED,
+        detected_at=datetime.now(timezone.utc),
+        revenue_at_risk=Decimal("45000.00"),
+        currency="INR",
+        confidence=Decimal("0.92"),
+        description="Payment drop spike on primary HDFC route",
+    )
+    await fake_uow.incidents.save(incident)
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.incident_id}/investigate",
+        headers={"X-Merchant-ID": str(merchant.merchant_id)},
+        json={},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["investigation"] is not None
+    assert "HDFC" in payload["investigation"]["primary_cause"]
+    assert payload["investigation"]["is_conclusive"] is True
+    assert payload["proposed_action"] is not None
+    assert payload["proposed_action"]["action_type"] == "gateway_reroute"
+    assert payload["policy_decision"]["decision"] == "allow"
+    assert payload["incident"]["status"] == "action_approved"
+
+
+@pytest.mark.anyio
+async def test_investigate_incident_ai_transient_failure_fails_closed(client, fake_uow):
+    """Verify transient AI failure returns 503 and rolls back incident status."""
+    from app.ai.errors import AIRateLimitError
+
+    merchant = Merchant(merchant_id=uuid4(), name="Merchant Transient", currency="INR")
+    await fake_uow.merchants.save(merchant)
+
+    incident = Incident(
+        incident_id=uuid4(),
+        merchant_id=merchant.merchant_id,
+        incident_type=IncidentType.PAYMENT_DROP_SPIKE,
+        severity=IncidentSeverity.HIGH,
+        status=IncidentStatus.DETECTED,
+        detected_at=datetime.now(timezone.utc),
+        revenue_at_risk=Decimal("45000.00"),
+        currency="INR",
+        confidence=Decimal("0.92"),
+        description="Payment drop spike",
+    )
+    await fake_uow.incidents.save(incident)
+
+    provider = FakeProvider()
+
+    async def fail_structured(*args, **kwargs):
+        raise AIRateLimitError("Upstream rate limited")
+
+    provider.generate_structured_json = fail_structured
+    app.dependency_overrides[get_ai_gateway] = lambda: AIGateway(
+        provider=provider, default_model="gpt-4o-mini", max_retries=1, backoff_factor=0.01
+    )
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.incident_id}/investigate",
+        headers={"X-Merchant-ID": str(merchant.merchant_id)},
+        json={},
+    )
+    assert response.status_code == 503
+    assert "temporarily unavailable" in response.json()["error"]["message"]
+
+    # Verify incident state was not persisted as INVESTIGATING
+    persisted_incident = await fake_uow.incidents.get_by_id(incident.incident_id)
+    assert persisted_incident.status == IncidentStatus.DETECTED
+
+
+@pytest.mark.anyio
+async def test_investigate_incident_ai_validation_failure_fails_closed(client, fake_uow):
+    """Verify malformed structured output returns 502 and rolls back incident status."""
+    merchant = Merchant(merchant_id=uuid4(), name="Merchant Validation", currency="INR")
+    await fake_uow.merchants.save(merchant)
+
+    incident = Incident(
+        incident_id=uuid4(),
+        merchant_id=merchant.merchant_id,
+        incident_type=IncidentType.PAYMENT_DROP_SPIKE,
+        severity=IncidentSeverity.HIGH,
+        status=IncidentStatus.DETECTED,
+        detected_at=datetime.now(timezone.utc),
+        revenue_at_risk=Decimal("45000.00"),
+        currency="INR",
+        confidence=Decimal("0.92"),
+        description="Payment drop spike",
+    )
+    await fake_uow.incidents.save(incident)
+
+    provider = FakeProvider()
+    provider.canned_json = '{"invalid_schema": true}'
+    app.dependency_overrides[get_ai_gateway] = lambda: AIGateway(
+        provider=provider, default_model="gpt-4o-mini", max_retries=1, backoff_factor=0.01
+    )
+
+    response = client.post(
+        f"/api/v1/incidents/{incident.incident_id}/investigate",
+        headers={"X-Merchant-ID": str(merchant.merchant_id)},
+        json={},
+    )
+    assert response.status_code == 502
+    assert "failed to produce a valid diagnosis" in response.json()["error"]["message"]
+
+    # Verify incident state is still DETECTED
+    persisted_incident = await fake_uow.incidents.get_by_id(incident.incident_id)
+    assert persisted_incident.status == IncidentStatus.DETECTED
