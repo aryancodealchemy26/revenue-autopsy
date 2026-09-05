@@ -39,10 +39,15 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: Optional[SecretStr] = None
     RAZORPAY_WEBHOOK_SECRET: Optional[SecretStr] = None
 
-    # LLM Settings (Optional in foundation phase)
-    LLM_PROVIDER: Optional[str] = None
-    LLM_MODEL: Optional[str] = None
+    # LLM Settings (Phase 9)
+    LLM_PROVIDER: Optional[str] = "fake"  # 'openai' or 'fake'
+    LLM_MODEL: Optional[str] = "gpt-4o-mini"
     LLM_API_KEY: Optional[SecretStr] = None
+    LLM_BASE_URL: Optional[str] = None
+    LLM_TIMEOUT_SECONDS: float = 30.0
+    LLM_MAX_RETRIES: int = 3
+    LLM_BACKOFF_FACTOR: float = 1.5
+    LLM_TEMPERATURE: float = 0.0
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

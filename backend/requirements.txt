@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+pydantic>=2.0.0
 pydantic-settings
 httpx
 pytest
@@ -8,4 +9,4 @@ alembic>=1.13.0
 asyncpg>=0.29.0
 aiosqlite>=0.20.0
 greenlet>=3.0.0
-
+openai>=1.0.0
