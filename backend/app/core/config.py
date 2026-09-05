@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     # Database Settings (Optional in foundation phase)
     DATABASE_URL: Optional[SecretStr] = None
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_ECHO: bool = False
 
     # Razorpay Credentials (Optional in foundation phase)
     RAZORPAY_KEY_ID: Optional[str] = None
