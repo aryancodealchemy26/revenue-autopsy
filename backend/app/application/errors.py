@@ -71,3 +71,46 @@ class RepositoryError(ApplicationError):
     """Raised when a repository operation encounters an unrecoverable failure."""
 
     pass
+
+
+class ExecutionError(ApplicationError):
+    """Base exception for action plan execution failures."""
+
+    pass
+
+
+class ActionNotApprovedError(ExecutionError):
+    """Raised when an unapproved action plan is dispatched for execution."""
+
+    def __init__(self, action_id: UUID, current_status: str):
+        super().__init__(
+            f"Action plan '{action_id}' is in status '{current_status}' and cannot be executed without approval."
+        )
+        self.action_id = action_id
+        self.current_status = current_status
+
+
+class DuplicateExecutionError(ExecutionError):
+    """Raised when attempting to execute an action plan that has already been executed."""
+
+    def __init__(self, action_id: UUID, current_status: str):
+        super().__init__(
+            f"Action plan '{action_id}' has already been processed with status '{current_status}'."
+        )
+        self.action_id = action_id
+        self.current_status = current_status
+
+
+class TenantMismatchError(ExecutionError):
+    """Raised when tenant merchant boundaries are violated during execution."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
+class ProviderExecutionError(ExecutionError):
+    """Raised when an external provider encounters an unrecoverable error during execution."""
+
+    def __init__(self, provider: str, message: str):
+        super().__init__(f"Provider '{provider}' execution failed: {message}")
+        self.provider = provider
