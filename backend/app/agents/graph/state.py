@@ -11,6 +11,7 @@ from app.agents.investigator.schemas import InvestigationResult
 from app.domain.actions.models import ActionPlan
 from app.domain.incidents.enums import IncidentSeverity, IncidentType
 from app.domain.incidents.models import Evidence
+from app.domain.policies.models import PolicyEvaluationResult
 
 
 class WorkflowStatus(str, Enum):
@@ -48,9 +49,10 @@ class IncidentInvestigationState(TypedDict, total=False):
     duration_hours: Optional[Decimal]
     revenue_at_risk: Decimal
 
-    # Structured Agent Outputs
+    # Structured Agent Outputs & Deterministic Policy
     investigation: Optional[InvestigationResult]
     proposed_action: Optional[ActionPlan]
+    policy_decision: Optional[PolicyEvaluationResult]
 
     # Workflow Execution Metadata
     status: WorkflowStatus

@@ -89,21 +89,26 @@ async def test_orchestration_service_end_to_end_success():
         correlation_id="corr-orch-01",
     )
 
+    from app.domain.policies.enums import PolicyDecision
+
     # Assert workflow result
     assert result_state["status"] == WorkflowStatus.COMPLETED
     assert result_state["investigation"] is not None
     assert result_state["proposed_action"] is not None
     assert result_state["proposed_action"].expected_recovery == Decimal("10500.00")  # 15000 * 0.70
+    assert result_state["policy_decision"] is not None
+    assert result_state["policy_decision"].decision == PolicyDecision.ALLOW
 
     # Assert database state updated and committed
     assert uow.committed is True
     updated_incident = await uow.incidents.get_by_id(incident_id)
-    assert updated_incident.status == IncidentStatus.ACTION_PROPOSED
+    assert updated_incident.status == IncidentStatus.ACTION_APPROVED
 
     saved_plans = await uow.action_plans.list_by_incident(incident_id)
     assert len(saved_plans) == 1
     assert saved_plans[0].action_type == ActionType.GATEWAY_REROUTE
-    assert saved_plans[0].status == ActionStatus.PROPOSED
+    assert saved_plans[0].status == ActionStatus.APPROVED
+    assert saved_plans[0].approval_required is False
 
     saved_evidence = await uow.evidence.list_by_incident(incident_id)
     assert len(saved_evidence) >= 2

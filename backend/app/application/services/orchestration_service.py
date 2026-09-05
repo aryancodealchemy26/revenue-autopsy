@@ -10,25 +10,35 @@ from app.agents.graph.workflow import create_incident_investigation_graph
 from app.ai.gateway import AIGateway
 from app.application.errors import IncidentNotFoundError, MerchantNotFoundError
 from app.application.ports.evidence_provider import EvidenceProvider
+from app.application.ports.policy_engine import PolicyEnginePort
 from app.application.ports.unit_of_work import UnitOfWork
+from app.application.state_machines import (
+    validate_action_transition,
+    validate_incident_transition,
+)
+from app.domain.actions.enums import ActionStatus
 from app.domain.incidents.enums import IncidentStatus
+from app.domain.policies.enums import PolicyDecision
+from app.policies.engine import DeterministicPolicyEngine
 
 logger = logging.getLogger(__name__)
 
 
 class IncidentOrchestrationService:
-    """Coordinates incident investigation and recovery planning through LangGraph workflows."""
+    """Coordinates incident investigation, recovery planning, and deterministic policy evaluation."""
 
     def __init__(
         self,
         uow: UnitOfWork,
         gateway: AIGateway,
         evidence_provider: EvidenceProvider,
+        policy_engine: Optional[PolicyEnginePort] = None,
         model: Optional[str] = None,
     ):
         self._uow = uow
         self._gateway = gateway
         self._evidence_provider = evidence_provider
+        self._policy_engine = policy_engine or DeterministicPolicyEngine()
         self._model = model
         self._graph = create_incident_investigation_graph(
             gateway=self._gateway,
@@ -100,11 +110,42 @@ class IncidentOrchestrationService:
             # 5. Execute LangGraph workflow
             result_state: IncidentInvestigationState = await self._graph.ainvoke(initial_state)
 
-            # 6. If ActionPlan proposed, persist and update incident status
+            # 6. If ActionPlan proposed, evaluate against deterministic Policy Engine
             proposed_action = result_state.get("proposed_action")
             if proposed_action:
-                await self._uow.action_plans.save(proposed_action)
+                existing_actions = await self._uow.action_plans.list_by_incident(incident.incident_id)
+                policy_decision = await self._policy_engine.evaluate_action_plan(
+                    merchant=merchant,
+                    incident=incident,
+                    action_plan=proposed_action,
+                    existing_actions=existing_actions,
+                    correlation_id=correlation_id,
+                )
+                result_state["policy_decision"] = policy_decision
+
+                # First transition incident to ACTION_PROPOSED
+                validate_incident_transition(incident.status, IncidentStatus.ACTION_PROPOSED)
                 incident.status = IncidentStatus.ACTION_PROPOSED
+
+                # Apply deterministic policy decision and state transitions
+                if policy_decision.decision == PolicyDecision.ALLOW:
+                    validate_action_transition(proposed_action.status, ActionStatus.POLICY_CHECK_PENDING)
+                    proposed_action.status = ActionStatus.POLICY_CHECK_PENDING
+                    validate_action_transition(proposed_action.status, ActionStatus.APPROVED)
+                    proposed_action.status = ActionStatus.APPROVED
+                    proposed_action.approval_required = False
+
+                    validate_incident_transition(incident.status, IncidentStatus.ACTION_APPROVED)
+                    incident.status = IncidentStatus.ACTION_APPROVED
+                elif policy_decision.decision == PolicyDecision.REQUIRE_APPROVAL:
+                    validate_action_transition(proposed_action.status, ActionStatus.POLICY_CHECK_PENDING)
+                    proposed_action.status = ActionStatus.POLICY_CHECK_PENDING
+                    proposed_action.approval_required = True
+                elif policy_decision.decision == PolicyDecision.DENY:
+                    validate_action_transition(proposed_action.status, ActionStatus.REJECTED)
+                    proposed_action.status = ActionStatus.REJECTED
+
+                await self._uow.action_plans.save(proposed_action)
                 await self._uow.incidents.save(incident)
 
             # 7. Commit transaction

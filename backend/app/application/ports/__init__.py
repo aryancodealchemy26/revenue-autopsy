@@ -1,6 +1,7 @@
 """Application ports package."""
 
 from app.application.ports.evidence_provider import EvidenceProvider
+from app.application.ports.policy_engine import PolicyEnginePort
 from app.application.ports.repositories import (
     ActionPlanRepository,
     EvidenceRepository,
@@ -18,6 +19,7 @@ __all__ = [
     "IncidentRepository",
     "MerchantRepository",
     "OutcomeRepository",
+    "PolicyEnginePort",
     "RevenueEventRepository",
     "UnitOfWork",
 ]
