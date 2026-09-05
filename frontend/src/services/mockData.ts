@@ -6,7 +6,7 @@
 import { FullIncidentContext, Incident, Evidence, ActionPlan, PolicyEvaluationResult, ExecutionResult, Outcome } from '../types/domain';
 
 export const MOCK_MERCHANT = {
-  merchant_id: 'merch_acme_tech_01',
+  merchant_id: '00000000-0000-0000-0000-000000000001',
   name: 'Acme Digital Commerce Pvt Ltd',
   currency: 'INR',
   timezone: 'Asia/Kolkata',

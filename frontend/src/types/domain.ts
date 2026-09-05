@@ -173,6 +173,22 @@ export interface Outcome {
   };
 }
 
+export interface ProvenanceEvent {
+  step: string;
+  actor: string;
+  timestamp: string;
+  status: string;
+  summary: string;
+}
+
+export interface InvestigationWorkflowResponse {
+  incident: Incident;
+  investigation: InvestigationResult | null;
+  revenue_at_risk_calculated: string;
+  proposed_action: ActionPlan | null;
+  policy_decision: PolicyEvaluationResult | null;
+}
+
 export interface FullIncidentContext {
   incident: Incident;
   evidences: Evidence[];
@@ -182,3 +198,4 @@ export interface FullIncidentContext {
   execution_result?: ExecutionResult;
   outcome?: Outcome;
 }
+

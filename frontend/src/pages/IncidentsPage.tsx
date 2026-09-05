@@ -9,12 +9,28 @@ import { Incident } from '../types/domain';
 
 export const IncidentsPage: React.FC = () => {
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
 
+  const loadIncidents = () => {
+    setLoading(true);
+    setError(null);
+    api.getIncidents()
+      .then((data) => {
+        setIncidents(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err?.message || 'Failed to load incidents from backend API');
+        setLoading(false);
+      });
+  };
+
   useEffect(() => {
-    api.getIncidents().then(setIncidents);
+    loadIncidents();
   }, []);
 
   const filteredIncidents = incidents.filter((inc) => {
@@ -110,6 +126,18 @@ export const IncidentsPage: React.FC = () => {
         </div>
       </div>
 
+      {error && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertOctagon className="h-4 w-4 shrink-0 text-rose-600" />
+            <span>{error}</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={loadIncidents}>
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Incidents List Table */}
       <Card>
         <div className="overflow-x-auto">
@@ -126,7 +154,14 @@ export const IncidentsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredIncidents.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-500 font-mono">
+                    <div className="h-4 w-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                    Loading incidents from backend API...
+                  </td>
+                </tr>
+              ) : filteredIncidents.length > 0 ? (
                 filteredIncidents.map((inc) => (
                   <tr key={inc.incident_id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-3">

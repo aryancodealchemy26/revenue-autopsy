@@ -1,196 +1,166 @@
 /**
- * Frontend API Service Layer
- * Interacts with backend API endpoints or falls back seamlessly to grounded operational state.
- * Grounded 1:1 with Domain Entities from Phases 5-13.
+ * Revenue Autopsy REST API Service Layer
+ * Typed boundary strictly consuming Phase 15 FastAPI REST endpoints (/api/v1/*).
+ * Zero AI keys or provider secrets in frontend.
  */
 
-import { FullIncidentContext, Incident, Evidence, InvestigationResult, ActionPlan, Outcome, PolicyEvaluationResult, ExecutionResult } from '../types/domain';
+import {
+  FullIncidentContext,
+  Incident,
+  Evidence,
+  ActionPlan,
+  Outcome,
+  ExecutionResult,
+  ProvenanceEvent,
+  InvestigationWorkflowResponse,
+} from '../types/domain';
 import { MOCK_INCIDENTS_CONTEXT, MOCK_MERCHANT } from './mockData';
 
+export const DEFAULT_MERCHANT_ID = '00000000-0000-0000-0000-000000000001';
+
+export class APIError extends Error {
+  status: number;
+  data: any;
+
+  constructor(status: number, message: string, data?: any) {
+    super(message);
+    this.name = 'APIError';
+    this.status = status;
+    this.data = data;
+  }
+}
+
 class RevenueAutopsyAPI {
-  private inMemoryStore: Record<string, FullIncidentContext> = JSON.parse(JSON.stringify(MOCK_INCIDENTS_CONTEXT));
+  private baseUrl = '/api/v1';
+  private merchantId: string = DEFAULT_MERCHANT_ID;
+
+  setMerchantId(id: string) {
+    this.merchantId = id;
+  }
+
+  getMerchantId(): string {
+    return this.merchantId;
+  }
+
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Merchant-ID': this.merchantId,
+      ...(options.headers as Record<string, string> || {}),
+    };
+
+    const res = await fetch(`${this.baseUrl}${endpoint}`, {
+      ...options,
+      headers,
+    });
+
+    if (!res.ok) {
+      let errorMessage = `HTTP ${res.status} ${res.statusText}`;
+      let errorData = null;
+      try {
+        errorData = await res.json();
+        if (errorData?.detail) {
+          errorMessage = typeof errorData.detail === 'string'
+            ? errorData.detail
+            : JSON.stringify(errorData.detail);
+        }
+      } catch {
+        // Response wasn't JSON
+      }
+      throw new APIError(res.status, errorMessage, errorData);
+    }
+
+    return (await res.json()) as T;
+  }
 
   async getMerchant() {
-    return MOCK_MERCHANT;
-  }
-
-  async getIncidents(): Promise<Incident[]> {
-    return Object.values(this.inMemoryStore).map((ctx) => ctx.incident);
-  }
-
-  async getIncidentById(id: string): Promise<FullIncidentContext | null> {
-    const ctx = this.inMemoryStore[id];
-    return ctx ? JSON.parse(JSON.stringify(ctx)) : null;
-  }
-
-  // 1. Gather Grounded Evidence
-  async gatherEvidence(incidentId: string): Promise<Evidence[]> {
-    const base = MOCK_INCIDENTS_CONTEXT[incidentId];
-    if (!base) throw new Error(`Incident ${incidentId} not found`);
-    await new Promise((res) => setTimeout(res, 350));
-    return JSON.parse(JSON.stringify(base.evidences));
-  }
-
-  // 2. Run LangGraph Multi-Agent Investigation
-  async runInvestigation(incidentId: string): Promise<InvestigationResult> {
-    const base = MOCK_INCIDENTS_CONTEXT[incidentId];
-    if (!base) throw new Error(`Incident ${incidentId} not found`);
-    await new Promise((res) => setTimeout(res, 550));
-    
-    if (base.investigation) {
-      return JSON.parse(JSON.stringify(base.investigation));
-    }
-
     return {
-      incident_id: incidentId,
-      primary_cause: 'Dynamic route degradation confirmed on payment provider endpoint.',
-      secondary_causes: ['Client retry queue amplification.'],
-      confidence: 0.92,
-      confidence_rationale: 'Telemetry signals exhibit high correlation with upstream gateway latency spike.',
-      affected_cohorts: ['DIRECT_CHECKOUT_USERS'],
-      evidence_keys_used: base.evidences.map((e) => e.evidence_id),
-      is_conclusive: true,
+      ...MOCK_MERCHANT,
+      merchant_id: this.merchantId,
     };
   }
 
-  // 3. Generate Mitigation Action Plan
-  async generateActionPlan(incidentId: string): Promise<ActionPlan> {
-    const base = MOCK_INCIDENTS_CONTEXT[incidentId];
-    if (!base) throw new Error(`Incident ${incidentId} not found`);
-    await new Promise((res) => setTimeout(res, 400));
-
-    if (base.proposed_action) {
-      return JSON.parse(JSON.stringify(base.proposed_action));
+  async checkHealth(): Promise<{ status: string; version: string; database?: string }> {
+    const res = await fetch('/health');
+    if (!res.ok) {
+      throw new APIError(res.status, `Health check failed with status ${res.status}`);
     }
-
-    return {
-      action_id: `act_${incidentId}_01`,
-      incident_id: incidentId,
-      action_type: 'gateway_reroute',
-      target: 'gateway_secondary_hot_standby',
-      expected_recovery: (parseFloat(base.incident.revenue_at_risk) * 0.8).toFixed(2),
-      currency: base.incident.currency,
-      risk_level: 'low',
-      confidence: '0.88',
-      approval_required: false,
-      status: 'approved',
-      rationale: 'Reroute active traffic to hot standby secondary provider.',
-      created_at: new Date().toISOString(),
-    };
+    return res.json();
   }
 
-  // 4. Deterministic Policy Evaluation
-  async evaluatePolicy(incidentId: string, actionId: string): Promise<PolicyEvaluationResult> {
-    const base = MOCK_INCIDENTS_CONTEXT[incidentId];
-    if (!base) throw new Error(`Incident ${incidentId} not found`);
-    await new Promise((res) => setTimeout(res, 400));
-
-    if (base.policy_decision) {
-      return JSON.parse(JSON.stringify(base.policy_decision));
-    }
-
-    return {
-      decision_id: `pol_${incidentId}_01`,
-      action_id: actionId,
-      incident_id: incidentId,
-      merchant_id: base.incident.merchant_id,
-      decision: 'allow',
-      reasons: ['Amount within auto-allow threshold', 'Low risk operation', 'Verified allowlist action type'],
-      rule_results: [
-        { rule_code: 'input_integrity', passed: true, decision_impact: 'allow', message: 'Tenant match verified.', evaluated_data: {} },
-        { rule_code: 'action_allowlist', passed: true, decision_impact: 'allow', message: 'Action type is permitted.', evaluated_data: {} },
-        { rule_code: 'monetary_limit', passed: true, decision_impact: 'allow', message: 'Within auto-allow cap.', evaluated_data: {} },
-      ],
-      evaluated_limits: { max_auto_allow_recovery: '50000.00', policy_version: '1.0.0' },
-      policy_version: '1.0.0',
-      evaluated_at: new Date().toISOString(),
-    };
+  // 1. Incidents
+  async getIncidents(limit = 50): Promise<Incident[]> {
+    return this.request<Incident[]>(`/incidents?limit=${limit}`);
   }
 
-  // 5. Operator Authorization (Sign-off for REQUIRE_APPROVAL)
-  async authorizeAction(incidentId: string, actionId: string): Promise<void> {
-    await new Promise((res) => setTimeout(res, 400));
+  async getIncidentById(incidentId: string): Promise<FullIncidentContext> {
+    // If an explicitly offline sandbox scenario is selected (non-UUID string alias), load from mockData
+    if (MOCK_INCIDENTS_CONTEXT[incidentId]) {
+      return JSON.parse(JSON.stringify(MOCK_INCIDENTS_CONTEXT[incidentId]));
+    }
+    return this.request<FullIncidentContext>(`/incidents/${incidentId}`);
   }
 
-  // 6. Guarded Action Execution
-  async executeAction(incidentId: string, actionId: string): Promise<ExecutionResult> {
-    const base = MOCK_INCIDENTS_CONTEXT[incidentId];
-    if (!base) throw new Error(`Incident ${incidentId} not found`);
-    await new Promise((res) => setTimeout(res, 500));
-
-    if (base.execution_result) {
-      return JSON.parse(JSON.stringify(base.execution_result));
+  async getIncidentEvidence(incidentId: string): Promise<Evidence[]> {
+    if (MOCK_INCIDENTS_CONTEXT[incidentId]) {
+      return JSON.parse(JSON.stringify(MOCK_INCIDENTS_CONTEXT[incidentId].evidences));
     }
-
-    return {
-      execution_id: `exec_sim_${Date.now().toString(16)}`,
-      merchant_id: base.incident.merchant_id,
-      incident_id: incidentId,
-      action_id: actionId,
-      provider: 'simulation_adapter',
-      action_type: base.proposed_action?.action_type || 'gateway_reroute',
-      status: 'simulated',
-      is_simulated: true,
-      provider_reference: `sim_ref_${Date.now().toString(16)}`,
-      idempotency_key: `exec_${actionId}_${Date.now()}`,
-      executed_at: new Date().toISOString(),
-      details: {
-        mode: 'sandbox_simulation',
-        notice: 'Executed truthfully under sandbox simulation adapter.',
-      },
-    };
+    return this.request<Evidence[]>(`/incidents/${incidentId}/evidence`);
   }
 
-  // 7. Post-Execution Telemetry Verification
-  async verifyOutcome(incidentId: string): Promise<Outcome> {
-    const base = MOCK_INCIDENTS_CONTEXT[incidentId];
-    if (!base) throw new Error(`Incident ${incidentId} not found`);
-    await new Promise((res) => setTimeout(res, 550));
-
-    if (base.outcome) {
-      return JSON.parse(JSON.stringify(base.outcome));
+  // 2. Autonomous Investigation & Policy Engine
+  async runInvestigation(
+    incidentId: string,
+    options?: {
+      baseline_hourly_rate?: number;
+      current_hourly_rate?: number;
+      duration_hours?: number;
+      correlation_id?: string;
     }
-
-    const expectedRec = parseFloat(base.proposed_action?.expected_recovery || '0');
-    const risk = parseFloat(base.incident.revenue_at_risk);
-    const recoveryRate = risk > 0 ? (expectedRec / risk).toFixed(4) : '1.0000';
-    const remaining = Math.max(0, risk - expectedRec).toFixed(2);
-
-    return {
-      outcome_id: `out_${Date.now()}`,
-      incident_id: incidentId,
-      action_id: base.proposed_action?.action_id || `act_${incidentId}_01`,
-      outcome_type: 'revenue_protected',
-      amount: expectedRec.toFixed(2),
-      currency: base.incident.currency,
-      status: 'verified',
-      measured_at: new Date().toISOString(),
-      reference_data: {
-        merchant_id: base.incident.merchant_id,
-        incident_id: incidentId,
-        action_id: base.proposed_action?.action_id || `act_${incidentId}_01`,
-        execution_id: `exec_sim_${incidentId}`,
-        execution_status: 'simulated',
-        execution_provider: 'simulation_adapter',
-        is_simulated: true,
-        verification_status: 'verified_success',
-        revenue_at_risk: base.incident.revenue_at_risk,
-        recovered_revenue: '0.00',
-        protected_revenue: expectedRec.toFixed(2),
-        total_impact: expectedRec.toFixed(2),
-        recovery_rate: recoveryRate,
-        remaining_revenue_at_risk: remaining,
-        correlation_id: `corr-${incidentId}`,
-      },
-    };
+  ): Promise<InvestigationWorkflowResponse> {
+    return this.request<InvestigationWorkflowResponse>(`/incidents/${incidentId}/investigate`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    });
   }
 
-  async getOutcomes(): Promise<Outcome[]> {
-    const outcomes: Outcome[] = [];
-    for (const ctx of Object.values(this.inMemoryStore)) {
-      if (ctx.outcome) outcomes.push(ctx.outcome);
-    }
-    return outcomes;
+  // 3. Action Plans
+  async getActionPlan(actionId: string): Promise<ActionPlan> {
+    return this.request<ActionPlan>(`/actions/${actionId}`);
+  }
+
+  // 4. Operator Authorization Sign-off
+  async authorizeAction(actionId: string, notes?: string): Promise<ActionPlan> {
+    return this.request<ActionPlan>(`/actions/${actionId}/authorize`, {
+      method: 'POST',
+      body: JSON.stringify({ notes: notes || 'Authorized via Incident Cockpit' }),
+    });
+  }
+
+  // 5. Guarded Execution
+  async executeAction(actionId: string): Promise<ExecutionResult> {
+    return this.request<ExecutionResult>(`/actions/${actionId}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  // 6. Post-Execution Telemetry Verification
+  async verifyOutcome(actionId: string): Promise<Outcome> {
+    return this.request<Outcome>(`/actions/${actionId}/verify`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  // 7. Chronological Provenance & Audit Stream
+  async getIncidentProvenance(incidentId: string): Promise<ProvenanceEvent[]> {
+    return this.request<ProvenanceEvent[]>(`/incidents/${incidentId}/provenance`);
+  }
+
+  // 8. Outcomes Ledger
+  async getOutcomes(limit = 50): Promise<Outcome[]> {
+    return this.request<Outcome[]>(`/outcomes?limit=${limit}`);
   }
 }
 

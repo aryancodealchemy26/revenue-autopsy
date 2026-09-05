@@ -25,7 +25,7 @@ import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
 import { api } from '../services/api';
-import { FullIncidentContext, Evidence, InvestigationResult, ActionPlan, PolicyEvaluationResult, ExecutionResult, Outcome } from '../types/domain';
+import { FullIncidentContext, Evidence, InvestigationResult, ActionPlan, PolicyEvaluationResult, ExecutionResult, Outcome, ProvenanceEvent } from '../types/domain';
 
 export type OperationState =
   | 'IDLE'
@@ -58,12 +58,14 @@ export const IncidentDetailPage: React.FC = () => {
   const [loadedPolicy, setLoadedPolicy] = useState<PolicyEvaluationResult | null>(null);
   const [loadedExecution, setLoadedExecution] = useState<ExecutionResult | null>(null);
   const [loadedOutcome, setLoadedOutcome] = useState<Outcome | null>(null);
+  const [loadedProvenance, setLoadedProvenance] = useState<ProvenanceEvent[]>([]);
 
   const [expandedEvidences, setExpandedEvidences] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (id) {
       setLoading(true);
+      setOpError(null);
       api.getIncidentById(id).then((ctx) => {
         setInitialContext(ctx);
         if (ctx) {
@@ -101,7 +103,12 @@ export const IncidentDetailPage: React.FC = () => {
           }
         }
         setLoading(false);
+      }).catch((err) => {
+        setOpError(err?.message || 'Failed to load incident');
+        setLoading(false);
       });
+
+      api.getIncidentProvenance(id).then(setLoadedProvenance).catch(() => {});
     }
   }, [id]);
 
@@ -115,45 +122,58 @@ export const IncidentDetailPage: React.FC = () => {
     setOpError(null);
 
     try {
-      // 1. GATHER EVIDENCE
-      setOpState('GATHERING_EVIDENCE');
+      setOpState('INVESTIGATING');
       setLoadedExecution(null);
       setLoadedOutcome(null);
-      const evidences = await api.gatherEvidence(id);
-      setLoadedEvidences(evidences);
-      setOpState('EVIDENCE_READY');
 
-      // 2. AI INVESTIGATION
-      setOpState('INVESTIGATING');
-      const investigation = await api.runInvestigation(id);
-      setLoadedInvestigation(investigation);
-      setOpState('INVESTIGATION_READY');
+      // Run real backend LangGraph investigation orchestrator
+      const invResponse = await api.runInvestigation(id);
 
-      // 3. RECOVERY PLAN GENERATION
-      const actionPlan = await api.generateActionPlan(id);
-      setLoadedAction(actionPlan);
-      setOpState('PLAN_READY');
+      // Refresh evidence
+      try {
+        const evidences = await api.getIncidentEvidence(id);
+        if (evidences && evidences.length > 0) {
+          setLoadedEvidences(evidences);
+        }
+      } catch {
+        // Keep existing evidence
+      }
 
-      // 4. DETERMINISTIC POLICY EVALUATION
-      setOpState('POLICY_EVALUATING');
-      const policyDecision = await api.evaluatePolicy(id, actionPlan.action_id);
-      setLoadedPolicy(policyDecision);
+      if (invResponse.investigation) {
+        setLoadedInvestigation(invResponse.investigation);
+      }
+      if (invResponse.proposed_action) {
+        setLoadedAction(invResponse.proposed_action);
+      }
+      if (invResponse.policy_decision) {
+        setLoadedPolicy(invResponse.policy_decision);
+      }
 
-      // Policy Branching
-      if (policyDecision.decision === 'deny') {
+      // Update incident object if updated
+      if (invResponse.incident) {
+        setInitialContext((prev) => prev ? { ...prev, incident: invResponse.incident } : null);
+      }
+
+      // Policy Gate Branching
+      const decision = invResponse.policy_decision?.decision;
+      if (decision === 'deny') {
         setOpState('DENIED');
         return;
       }
 
-      if (policyDecision.decision === 'require_approval') {
+      if (decision === 'require_approval') {
         setOpState('AWAITING_APPROVAL');
         return; // HALT! Never proceed to execution before explicit operator authorization
       }
 
-      // 5. GUARDED EXECUTION (ALLOW path)
-      await proceedToExecution(actionPlan.action_id);
+      // If ALLOW, proceed directly to execution with returned action plan
+      if (invResponse.proposed_action) {
+        await proceedToExecution(invResponse.proposed_action.action_id);
+      } else {
+        setOpState('PLAN_READY');
+      }
     } catch (err: any) {
-      setOpError(err?.message || 'Operation failed');
+      setOpError(err?.message || 'Investigation failed');
       setOpState('FAILED');
     }
   };
@@ -165,8 +185,9 @@ export const IncidentDetailPage: React.FC = () => {
 
     try {
       setOpState('EXECUTING');
-      await api.authorizeAction(id, loadedAction.action_id);
-      await proceedToExecution(loadedAction.action_id);
+      const authorizedPlan = await api.authorizeAction(loadedAction.action_id);
+      setLoadedAction(authorizedPlan);
+      await proceedToExecution(authorizedPlan.action_id);
     } catch (err: any) {
       setOpError(err?.message || 'Authorization failed');
       setOpState('FAILED');
@@ -177,14 +198,29 @@ export const IncidentDetailPage: React.FC = () => {
   const proceedToExecution = async (actionId: string) => {
     if (!id) return;
     setOpState('EXECUTING');
-    const execResult = await api.executeAction(id, actionId);
-    setLoadedExecution(execResult);
+    try {
+      const execResult = await api.executeAction(actionId);
+      setLoadedExecution(execResult);
 
-    // 6. POST-EXECUTION VERIFICATION
-    setOpState('VERIFYING');
-    const outcome = await api.verifyOutcome(id);
-    setLoadedOutcome(outcome);
-    setOpState('RESOLVED');
+      // Post-execution verification
+      setOpState('VERIFYING');
+      const outcome = await api.verifyOutcome(actionId);
+      setLoadedOutcome(outcome);
+      setOpState('RESOLVED');
+
+      // Refresh provenance trail from backend
+      try {
+        const prov = await api.getIncidentProvenance(id);
+        if (prov && prov.length > 0) {
+          setLoadedProvenance(prov);
+        }
+      } catch {
+        // Keep active provenance
+      }
+    } catch (err: any) {
+      setOpError(err?.message || 'Execution / Verification failed');
+      setOpState('FAILED');
+    }
   };
 
   if (loading) {
@@ -222,57 +258,66 @@ export const IncidentDetailPage: React.FC = () => {
     : incident.status.replace('_', ' ').toUpperCase();
 
   // Build Dynamic Audit Provenance Entries
-  const provenanceEvents = [
-    {
-      step: '1. Incident Signal Detected',
-      time: incident.detected_at,
-      status: 'DETECTED',
-      actor: 'Signal Ingestion Engine',
-      summary: `${incident.incident_type} detected. Initial revenue at risk computed at ₹${parseFloat(incident.revenue_at_risk).toLocaleString('en-IN')}.`,
-    },
-    loadedEvidences.length > 0 && {
-      step: '2. Evidence Collected',
-      time: loadedEvidences[0]?.observed_at || incident.detected_at,
-      status: 'COLLECTED',
-      actor: 'Telemetry & Logs Collector',
-      summary: `Gathered ${loadedEvidences.length} structured diagnostic payloads (${loadedEvidences.map(e => e.evidence_type).join(', ')}).`,
-    },
-    loadedInvestigation && {
-      step: '3. Investigation & Attribution',
-      time: incident.detected_at,
-      status: 'CONCLUSIVE',
-      actor: `AI Investigator Agent (Confidence: ${(loadedInvestigation.confidence * 100).toFixed(0)}%)`,
-      summary: `Root cause: ${loadedInvestigation.primary_cause}. Impacted cohorts: ${loadedInvestigation.affected_cohorts.join(', ')}.`,
-    },
-    loadedAction && {
-      step: '4. Recovery Plan Proposed',
-      time: loadedAction.created_at,
-      status: opState === 'AWAITING_APPROVAL' ? 'PENDING_APPROVAL' : loadedAction.status.toUpperCase(),
-      actor: 'Recovery Planner Agent',
-      summary: `Formulated ${loadedAction.action_type.toUpperCase()} mitigation plan for ${loadedAction.target}. Expected recovery: ₹${parseFloat(loadedAction.expected_recovery).toLocaleString('en-IN')}.`,
-    },
-    loadedPolicy && {
-      step: '5. Deterministic Policy Evaluation',
-      time: loadedPolicy.evaluated_at || incident.detected_at,
-      status: loadedPolicy.decision.toUpperCase(),
-      actor: `PolicyEngine (${loadedPolicy.policy_version})`,
-      summary: `Evaluated ${loadedPolicy.rule_results.length} deterministic rules. Final decision: ${loadedPolicy.decision.toUpperCase()}. (${loadedPolicy.reasons.join('; ')})`,
-    },
-    loadedExecution && {
-      step: '6. Guarded Execution',
-      time: loadedExecution.executed_at,
-      status: loadedExecution.status.toUpperCase(),
-      actor: `Execution Broker (${loadedExecution.provider})`,
-      summary: `Executed ${loadedExecution.action_type.toUpperCase()} via ${loadedExecution.provider}. Idempotency key: ${loadedExecution.idempotency_key}.`,
-    },
-    loadedOutcome && {
-      step: '7. Economic Verification',
-      time: loadedOutcome.measured_at,
-      status: (loadedOutcome.reference_data.verification_status || 'VERIFIED_SUCCESS').toUpperCase(),
-      actor: 'Verification Engine',
-      summary: `Verified economic protection: ₹${parseFloat(loadedOutcome.reference_data.protected_revenue || loadedOutcome.amount || '0').toLocaleString('en-IN')} protected. Recovery Rate: ${(parseFloat(loadedOutcome.reference_data.recovery_rate || '1') * 100).toFixed(1)}%.`,
-    },
-  ].filter(Boolean) as { step: string; time: string; status: string; actor: string; summary: string }[];
+  const provenanceEvents = loadedProvenance.length > 0
+    ? loadedProvenance.map((ev) => ({
+        step: ev.step,
+        time: ev.timestamp,
+        status: ev.status,
+        actor: ev.actor,
+        summary: ev.summary,
+      }))
+    : [
+        {
+          step: '1. Incident Signal Detected',
+          time: incident.detected_at,
+          status: 'DETECTED',
+          actor: 'Signal Ingestion Engine',
+          summary: `${incident.incident_type} detected. Initial revenue at risk computed at ₹${parseFloat(incident.revenue_at_risk).toLocaleString('en-IN')}.`,
+        },
+        loadedEvidences.length > 0 && {
+          step: '2. Evidence Collected',
+          time: loadedEvidences[0]?.observed_at || incident.detected_at,
+          status: 'COLLECTED',
+          actor: 'Telemetry & Logs Collector',
+          summary: `Gathered ${loadedEvidences.length} structured diagnostic payloads (${loadedEvidences.map(e => e.evidence_type).join(', ')}).`,
+        },
+        loadedInvestigation && {
+          step: '3. Investigation & Attribution',
+          time: incident.detected_at,
+          status: 'CONCLUSIVE',
+          actor: `AI Investigator Agent (Confidence: ${(loadedInvestigation.confidence * 100).toFixed(0)}%)`,
+          summary: `Root cause: ${loadedInvestigation.primary_cause}. Impacted cohorts: ${loadedInvestigation.affected_cohorts.join(', ')}.`,
+        },
+        loadedAction && {
+          step: '4. Recovery Plan Proposed',
+          time: loadedAction.created_at,
+          status: opState === 'AWAITING_APPROVAL' ? 'PENDING_APPROVAL' : loadedAction.status.toUpperCase(),
+          actor: 'Recovery Planner Agent',
+          summary: `Formulated ${loadedAction.action_type.toUpperCase()} mitigation plan for ${loadedAction.target}. Expected recovery: ₹${parseFloat(loadedAction.expected_recovery).toLocaleString('en-IN')}.`,
+        },
+        loadedPolicy && {
+          step: '5. Deterministic Policy Evaluation',
+          time: loadedPolicy.evaluated_at || incident.detected_at,
+          status: loadedPolicy.decision.toUpperCase(),
+          actor: `PolicyEngine (${loadedPolicy.policy_version})`,
+          summary: `Evaluated ${loadedPolicy.rule_results.length} deterministic rules. Final decision: ${loadedPolicy.decision.toUpperCase()}. (${loadedPolicy.reasons.join('; ')})`,
+        },
+        loadedExecution && {
+          step: '6. Guarded Execution',
+          time: loadedExecution.executed_at,
+          status: loadedExecution.status.toUpperCase(),
+          actor: `Execution Broker (${loadedExecution.provider})`,
+          summary: `Executed ${loadedExecution.action_type.toUpperCase()} via ${loadedExecution.provider}. Idempotency key: ${loadedExecution.idempotency_key}.`,
+        },
+        loadedOutcome && {
+          step: '7. Economic Verification',
+          time: loadedOutcome.measured_at,
+          status: (loadedOutcome.reference_data?.verification_status || 'VERIFIED_SUCCESS').toUpperCase(),
+          actor: 'Verification Engine',
+          summary: `Verified economic protection: ₹${parseFloat(loadedOutcome.reference_data?.protected_revenue || loadedOutcome.amount || '0').toLocaleString('en-IN')} protected. Recovery Rate: ${(parseFloat(loadedOutcome.reference_data?.recovery_rate || '1') * 100).toFixed(1)}%.`,
+        },
+      ].filter(Boolean) as { step: string; time: string; status: string; actor: string; summary: string }[];
+
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -859,7 +904,7 @@ export const IncidentDetailPage: React.FC = () => {
       {/* BOTTOM FULL-WIDTH AUDIT PROVENANCE CARD */}
       <Card
         title={`Chronological Provenance & Audit Stream (${provenanceEvents.length} Events Recorded)`}
-        subtitle="Cryptographically verified state machine trace from initial detection to economic outcome"
+        subtitle="Chronological state machine trace from initial detection to economic outcome"
       >
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
